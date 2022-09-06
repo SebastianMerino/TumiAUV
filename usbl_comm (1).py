@@ -429,8 +429,8 @@ def is_transceiver_idle():
     
 #transmit a ping: '#4002040177\r\n'
 def ping_beacon(dest_id):
-    #if (is_transceiver_idle()):
-    if True:
+    if (is_transceiver_idle()):
+        #if True:
         CmdId = CID_E.PING_SEND
         MSGType = AMSGTYPE_E.MSG_REQU
         data = bytes([CmdId, dest_id, MSGType])

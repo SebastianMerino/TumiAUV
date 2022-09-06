@@ -1,44 +1,21 @@
-from dataclasses import dataclass
 from enum import IntEnum
 import struct
 import crcmod
 
-#=====================================
-#    Utility functions
-#=====================================
 # Funcion para obtener CRC
 crc16 = crcmod.mkCrcFun(0x18005, rev=True, initCrc=0x0000)
 
-def checksum(msg: bytearray):
-    """ Calcula el checksum con crc16 para el comando y lo
-    compara para hacer la comparación """
-    received_csum = interpretData(msg[-6:-2],'<H')
-    cmd = msg[:-6]
-    cmd_bytes = bytes.fromhex(cmd.decode())
-    csum = crc16(cmd_bytes)
-    return csum == received_csum
-
-def append_checksum(msg: bytearray):
-    """  """
-    cmd_bytes = bytes.fromhex(msg.decode())
-    csum = crc16(cmd_bytes)
-    # AÑADIR CSUM AL FINAL
-    # DEFINIR FUNCION PARA APPEND DATOS A BYTEARRAY SEGUN TIPO DE DATO
-    return msg
-
+#=====================================
+#    Decoding functions
+#=====================================
 def interpretData(data: bytearray, type: str):
     """ Extrae un número de bytes de la cadena según el tipo 
     y los decodifica. Tipos:
-        <b  int8
-        <B  uint8 (char)
-        <h  int16 (short)
-        <H  uint16
-        <i  int32 (int)
-        <I  uint32
-        <q  int64 (long)
-        <Q  uint64
-        <f  float
-        <d  double
+        <b  int8        <B  uint8
+        <h  int16       <H  uint16
+        <i  int32       <I  uint32
+        <q  int64       <Q  uint64 
+        <f  float       <d  double
     """
     length = struct.calcsize(type)
     data_str = data.decode() 
@@ -46,9 +23,15 @@ def interpretData(data: bytearray, type: str):
     del data[:length*2]
     return struct.unpack(type,data_bytes)[0]
 
-#=====================================
-#    Decoding functions
-#=====================================
+def checksum(msg: bytearray):
+    """ Calcula el checksum con crc16 para el comando y lo
+    compara con el recibido en la cadena de bytes """
+    received_csum = interpretData(msg[-6:-2],'<H')
+    cmd = msg[:-6]
+    cmd_bytes = bytes.fromhex(cmd.decode())
+    csum = crc16(cmd_bytes)
+    return csum == received_csum
+
 def decode_status_state(response: bytearray):
     """ Decodifica la respuesta de estado y muestra parámetros de interés """
     status_flags = interpretData(response,'<B')
@@ -60,11 +43,59 @@ def decode_status_state(response: bytearray):
 
 def decode_ping_resp(response: bytearray):
     """ Decodifica la respuesta de estado """
-    aco_fix = ACOFIX_T(response)
-    print(f'Velocity of sound = {aco_fix.VOS}m/s')
-    print(f'Position North = {aco_fix.POSITION_NORTHING}m')
-    print(f'Position East = {aco_fix.POSITION_EASTING}m')
-    print(f'Position Depth = {aco_fix.POSITION_DEPTH}m')
+    acofix = ACOFIX_T(response)
+    print(f'Velocity of sound = {acofix.VOS}m/s')
+    print(f'Position North = {acofix.POSITION_NORTHING}m')
+    print(f'Position East = {acofix.POSITION_EASTING}m')
+    print(f'Position Depth = {acofix.POSITION_DEPTH}m')
+    print(f'ACOFIX object = {acofix.__dict__}')
+
+def decode_ping_send(response: bytearray):
+    status = interpretData(response,'<B')
+    print(f'Status = {CST_E(status).name}')
+    id = interpretData(response,'<B')
+    print(f'Beacon ID = {BID_E(id).name}')
+
+def decode_ping_error(response: bytearray):
+    status = interpretData(response,'<B')
+    print(f'Error = {CST_E(status).name}')
+    id = interpretData(response,'<B')
+    print(f'Beacon ID = {BID_E(id).name}')
+
+#=====================================
+#    Encoding functions
+#=====================================
+def append_checksum(msg: bytearray):
+    """ Añade el checksum al bytearray msg """
+    payload = msg.decode()[1:]
+    cmd_bytes = bytes.fromhex(payload)
+    csum = crc16(cmd_bytes)
+    appendData(msg,csum,'<H')
+    return msg
+
+def appendData(msg: bytearray, data, type: str):
+    """ Decodifica un dato dependiendo del tipo y lo
+    añade al bytearray msg. Tipos:
+        <b  int8        <B  uint8
+        <h  int16       <H  uint16
+        <i  int32       <I  uint32
+        <q  int64       <Q  uint64 
+        <f  float       <d  double
+    """
+    data_packed = struct.pack(type,data)
+    data_str = data_packed.hex()
+    msg.extend(bytearray(data_str.encode()))
+
+def encode_ping_send(msg:bytearray, id):
+    cid = CID_E.PING_SEND.value
+    dest_id = BID_E(id).value
+    msg_type = AMSGTYPE_E.MSG_REQU
+    appendData(msg,cid,'<B')
+    appendData(msg,dest_id,'<B')
+    appendData(msg,msg_type,'<B')
+    append_checksum(msg)
+    msg.extend(b'\r\n')
+    return msg
 
 #=====================================
 #    Structures
@@ -73,7 +104,7 @@ class ACOFIX_T:
     def __init__(self,data) -> None:
         self.DEST_ID = BID_E( interpretData(data,'<B') ).name
         self.SRC_ID  = BID_E( interpretData(data,'<B') ).name
-        self.FLAGS   = interpretData(data,1)
+        self.FLAGS   = interpretData(data,'<B')
         self.MSG_TYPE = AMSGTYPE_E( interpretData(data,'<B') ).name
         self.ATTITUDE_YAW = interpretData(data,'<h')/10
         self.ATTITUDE_PITCH = interpretData(data,'<h')/10
@@ -81,23 +112,23 @@ class ACOFIX_T:
         self.DEPTH_LOCAL = interpretData(data,'<H')
         self.VOS = interpretData(data,'<H')/10
         self.RSSI = interpretData(data,'<h')/10
-        if(self.flags & 0x01):
+        if(self.FLAGS & 0x01):
             self.RANGE_COUNT = interpretData(data,'<I')
             self.RANGE_TIME  = interpretData(data,'<i')/10000000
             self.RANGE_DIST  = interpretData(data,'<H')/10
-        if(self.flags & 0x02):
+        if(self.FLAGS & 0x02):
             self.USBL_CHANNELS = interpretData(data,'<B')
             self.USBL_RSSI = [interpretData(data,'<h')/10 for i in range(self.USBL_CHANNELS)]
             self.USBL_AZIMUTH = interpretData(data,'<h')/10
             self.USBL_ELEVATION = interpretData(data,'<h')/10
             self.USBL_FIT_ERROR = interpretData(data,'<h')/100
-        if(self.flags & 0x04):
+        if(self.FLAGS & 0x04):
             self.POSITION_EASTING = interpretData(data,'<h')/10
             self.POSITION_NORTHING = interpretData(data,'<h')/10
             self.POSITION_DEPTH = interpretData(data,'<h')/10
-        if(self.flags & 0x08):
+        if(self.FLAGS & 0x08):
             print('POS ENHACED')
-        if(self.flags & 0x10):
+        if(self.FLAGS & 0x10):
             print('POS FILTER ERROR')
 
 class STATUS_T:
